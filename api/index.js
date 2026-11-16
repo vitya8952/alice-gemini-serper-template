@@ -81,8 +81,58 @@ async function fetchJson(url, options, timeoutMs) {
   }
 }
 
+async function searchGoogleNewsRss(query, timeoutMs) {
+  if (timeoutMs < 250) return "";
+  const startedAt = Date.now();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), Math.max(250, timeoutMs));
+  try {
+    const url = "https://news.google.com/rss/search?q=" +
+      encodeURIComponent(query + " when:1d") +
+      "&hl=ru&gl=RU&ceid=RU:ru";
+    const response = await fetch(url, {
+      headers: { "User-Agent": "Mozilla/5.0 (compatible; AliceNewsBot/1.0)" },
+      signal: controller.signal
+    });
+    const xml = await response.text();
+    if (!response.ok) {
+      console.warn("Google News RSS failed:", { status: response.status, elapsedMs: Date.now() - startedAt });
+      return "";
+    }
+    const decode = value => String(value || "")
+      .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1")
+      .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+      .replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'");
+    const entries = [...xml.matchAll(/<item>([\s\S]*?)<\/item>/gi)].slice(0, 5);
+    const items = entries.map((match, index) => {
+      const block = match[1];
+      const field = name => {
+        const found = block.match(new RegExp("<" + name + ">([\\\\s\\\\S]*?)<\\\\/" + name + ">", "i"));
+        return found ? decode(found[1]).trim() : "";
+      };
+      const title = field("title").slice(0, 180);
+      const link = field("link").slice(0, 500);
+      const source = field("source").slice(0, 100);
+      const pubDate = field("pubDate");
+      const date = pubDate ? new Date(pubDate).toLocaleString("ru-RU", { timeZone: "Europe/Warsaw" }) : "не указана";
+      const description = field("description").replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").slice(0, 240);
+      return title ? \`\${index + 1}. \${title}. Источник: \${source || "Google Новости"}. Дата: \${date}. \${description} Ссылка: \${link}\` : "";
+    }).filter(Boolean);
+    console.info("Google News RSS completed:", { resultCount: items.length, elapsedMs: Date.now() - startedAt });
+    return items.join("\n");
+  } catch (error) {
+    console.warn("Google News RSS failed:", { error: String(error?.name || error?.message || "unknown").slice(0, 100), elapsedMs: Date.now() - startedAt });
+    return "";
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function searchWeb(query, timeoutMs, options = {}) {
   const searchStartedAt = Date.now();
+  if (options.news) {
+    return await searchGoogleNewsRss(query, Math.min(1500, timeoutMs));
+  }
   const key = process.env.SERPER_API_KEY;
   if (!key || timeoutMs < 150) return "";
 
