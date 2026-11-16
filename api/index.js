@@ -106,7 +106,7 @@ async function searchGoogleNewsRss(query, timeoutMs) {
     const allEntries = [...xml.matchAll(/<item>([\s\S]*?)<\/item>/gi)];
     const entries = allEntries.slice(0, 5);
     console.info("Google News RSS parsed:", { status: Number(response.status), responseBytes: Buffer.byteLength(xml, "utf8"), entryCount: allEntries.length });
-    const items = entries.map((match, index) => {
+    const parsedItems = entries.map((match, index) => {
       const block = match[1];
       const field = name => {
         const found = block.match(new RegExp("<" + name + ">([\\s\\S]*?)</" + name + ">", "i"));
@@ -114,14 +114,34 @@ async function searchGoogleNewsRss(query, timeoutMs) {
       };
       const title = field("title").slice(0, 180);
       const link = field("link").slice(0, 500);
-      const source = field("source").slice(0, 100);
       const pubDate = field("pubDate");
       const date = pubDate ? new Date(pubDate).toLocaleString("ru-RU", { timeZone: "Europe/Warsaw" }) : "не указана";
-      const description = field("description").replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").slice(0, 240);
-      return title ? `${index + 1}. ${title}. Источник: ${source || "Google Новости"}. Дата: ${date}. ${description} Ссылка: ${link}` : "";
-    }).filter(Boolean);
+      return title && link ? { index, title, link, date } : null;
+    }).filter(Boolean).slice(0, 3);
+
+    // Resolve Google News redirects to publisher URLs when possible.
+    const items = await Promise.all(parsedItems.map(async item => {
+      let link = item.link;
+      try {
+        const redirectController = new AbortController();
+        const redirectTimer = setTimeout(() => redirectController.abort(), 650);
+        try {
+          const resolved = await fetch(link, {
+            method: "HEAD",
+            redirect: "follow",
+            signal: redirectController.signal,
+            headers: { "User-Agent": "Mozilla/5.0 (compatible; AliceNewsBot/1.0)" }
+          });
+          if (resolved.url && !resolved.url.includes("news.google.com")) link = resolved.url;
+        } finally {
+          clearTimeout(redirectTimer);
+        }
+      } catch {}
+      const title = item.title.replace(/\s+/g, " ").trim().slice(0, 64);
+      return \`\${item.index + 1}. \${title} — \${item.date.split(",")[0]}. Ссылка: \${link}\`;
+    }));
     console.info("Google News RSS completed:", { resultCount: items.length, elapsedMs: Date.now() - startedAt });
-    return items.join("\n");
+    return items.join("\\n");
   } catch (error) {
     console.warn("Google News RSS failed:", { error: String(error?.name || error?.message || "unknown").slice(0, 100), elapsedMs: Date.now() - startedAt });
     return "";
@@ -233,25 +253,13 @@ async function searchWeb(query, timeoutMs, options = {}) {
 function formatNewsAnswer(searchContext) {
   const lines = String(searchContext || "").split(/\r?\n/).filter(Boolean).slice(0, 3);
   const stories = lines.map((line, index) => {
-    const prefix = line.match(/^\d+\.\s*/)?.[0] || "";
-    const sourceMarker = ". Источник:";
-    const dateMarker = ". Дата:";
-    const linkMarker = " Ссылка:";
-    const sourceAt = line.indexOf(sourceMarker);
-    const dateAt = line.indexOf(dateMarker, sourceAt + sourceMarker.length);
-    const linkAt = line.lastIndexOf(linkMarker);
-    if (!prefix || sourceAt < 0 || dateAt < 0 || linkAt < 0 || linkAt <= dateAt) return "";
-    const title = line.slice(prefix.length, sourceAt).trim().slice(0, 68);
-    const dateText = line.slice(dateAt + dateMarker.length, linkAt);
-    const dateMatch = dateText.match(/\d{1,2}\.\d{1,2}\.\d{4}|[A-Z][a-z]{2,8}\s+\d{1,2},?\s+\d{4}/i);
-    const date = (dateMatch?.[0] || "дата не указана").trim();
-    const url = line.slice(linkAt + linkMarker.length).trim();
-    if (!title || !/^https?:\/\//i.test(url)) return "";
-    return (index + 1) + ". " + title + " — " + date + ". " + url;
+    const match = line.match(/^\d+\.\s*(.*?)\s+—\s+(\d{1,2}\.\d{1,2}\.\d{4})\.\s+Ссылка:\s+(https?:\/\/\S+)/);
+    if (!match) return "";
+    return (index + 1) + ". " + match[1].slice(0, 64) + " — " + match[2] + ". " + match[3];
   }).filter(Boolean);
-  return stories.length
+  return stories.length === 3
     ? "Три новости за сегодня: " + stories.join(" ")
-    : "Нашла новости, но не смогла надёжно извлечь их ссылки и даты. Не буду их выдумывать.";
+    : "Нашла новости, но не смогла надёжно извлечь все три ссылки и даты. Не буду их выдумывать.";
 }
 
 async function askGemini(text, history, searchContext, timeoutMs) {
