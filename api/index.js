@@ -338,13 +338,12 @@ export default async function handler(req, res) {
     ));
   }
 
-    if (isSearchIntent(text)) {
     let searchContext = "";
-    if (isSearchIntent(text) && process.env.SERPER_API_KEY) {
-      // Search has a very short budget because Alice expects a response within 4.5 seconds.
-      const technologyNews = isTechnologyNewsIntent(text);
-      const newsSearch = isNewsIntent(text);
-      if (newsSearch || process.env.SERPER_API_KEY) {
+    const technologyNews = isTechnologyNewsIntent(text);
+    const newsSearch = isNewsIntent(text);
+
+    if (isSearchIntent(text) && (newsSearch || process.env.SERPER_API_KEY)) {
+      // Google News RSS does not require a Serper API key.
       const searchQuery = technologyNews
         ? "технологии OR искусственный интеллект OR IT OR гаджеты"
         : newsSearch
@@ -355,18 +354,19 @@ export default async function handler(req, res) {
         Math.min(SERPER_TIMEOUT_MS, Math.max(0, remainingMs() - 2600)),
         { news: newsSearch }
       );
-      }
-      if (newsSearch && !searchContext) {
-        const history = [...oldHistory,
-          { role: "user", text: text.slice(0, MAX_HISTORY_MESSAGE_CHARS) },
-          { role: "model", text: "Не удалось получить свежие новости из поискового источника. Попробуй немного позже." }
-        ].slice(-MAX_HISTORY_MESSAGES);
-        return res.status(200).json(aliceResponse(
-          "Сейчас не получилось загрузить новости из поискового источника. Не буду придумывать заголовки и даты — попробуем позже.",
-          false,
-          history
-        ));
-      }
+    }
+
+    if (newsSearch && !searchContext) {
+      const history = [
+        ...oldHistory,
+        { role: "user", text: text.slice(0, MAX_HISTORY_MESSAGE_CHARS) },
+        { role: "model", text: "Не удалось получить свежие новости из поискового источника. Попробуй немного позже." }
+      ].slice(-MAX_HISTORY_MESSAGES);
+      return res.status(200).json(aliceResponse(
+        "Сейчас не получилось загрузить новости из поискового источника. Не буду придумывать заголовки и даты — попробуем позже.",
+        false,
+        history
+      ));
     }
 
     const answer = await askGemini(
