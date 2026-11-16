@@ -26,13 +26,16 @@ function aliceResponse(text, endSession = false, history = [], userStateUpdate =
     },
     session_state: { history }
   };
-  if (userStateUpdate) result.user_state_update = userStateUpdate;
+  if (userStateUpdate) result.user_state_update = { value: userStateUpdate };
   return result;
 }
 
 function safeUserState(value) {
-  const incoming = Array.isArray(value?.memory)
-    ? value.memory.filter(item => typeof item === "string").map(item => item.trim()).filter(Boolean)
+  // Yandex Dialogs stores persistent user data under state.user.value.
+  // Accept the direct shape too, for compatibility with older stored state.
+  const source = value?.value && typeof value.value === "object" ? value.value : value;
+  const incoming = Array.isArray(source?.memory)
+    ? source.memory.filter(item => typeof item === "string").map(item => item.trim()).filter(Boolean)
     : [];
   const memory = [];
   for (const item of incoming) {
@@ -552,7 +555,7 @@ export default async function handler(req, res) {
   const body = req.body && typeof req.body === "object" ? req.body : {};
   const text = String(body?.request?.command || body?.request?.original_utterance || "").trim();
   const oldHistory = safeHistory(body?.state?.session?.history);
-  const oldUserState = safeUserState(body?.state?.user);
+  const oldUserState = safeUserState(body?.state?.user?.value ?? body?.state?.user);
   const userStateUpdate = updateUserMemory(oldUserState, text);
 
   if (!text) {
