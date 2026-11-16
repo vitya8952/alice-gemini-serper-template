@@ -64,7 +64,7 @@ function isForgetMemoryCommand(text) {
     .toLowerCase()
     .replace(/ё/g, "е")
     .replace(/[.,!?]/g, " ")
-    .replace(/\\s+/g, " ")
+    .replace(/\s+/g, " ")
     .trim()
     .replace(/^(?:алиса[, ]*)/, "");
   return /^(?:забудь все(?: что ты (?:знаешь|помнишь) обо мне)?|забудь все что ты обо мне (?:знаешь|помнишь)|удали всю память|очисти память)$/.test(normalized);
@@ -73,7 +73,7 @@ function isForgetMemoryCommand(text) {
 function updateUserMemory(previousState, userText) {
   const state = safeUserState(previousState);
   const text = String(userText || "").trim();
-  if (/\b(забудь всё|удали всю память|очисти память|забудь всё, что ты обо мне знаешь)\b/i.test(text)) {
+  if (isForgetMemoryCommand(text)) {
     return { memory: [] };
   }
 
