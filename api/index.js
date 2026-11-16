@@ -31,8 +31,8 @@ function aliceResponse(text, endSession = false, history = []) {
 
 function fitAliceText(value) {
   const text = String(value ?? "")
-    .replace(/[\\r\\n\\t]+/g, " ")
-    .replace(/\\s{2,}/g, " ")
+    .replace(/[\r\n\t]+/g, " ")
+    .replace(/\s{2,}/g, " ")
     .trim();
 
   if (text.length <= MAX_ALICE_TEXT) return text || "Не удалось подготовить ответ.";
@@ -50,7 +50,7 @@ function fitAliceText(value) {
 }
 
 function isSearchIntent(text) {
-  return /\\b(latest|today|current|news|weather|price|exchange rate|recent|search|look up)\\b|сегодня|сейчас|последн|новост|погод|курс валют|найди|поищи|актуальн|сколько стоит|свежие данные/i.test(text);
+  return /\b(latest|today|current|news|weather|price|exchange rate|recent|search|look up)\b|сегодня|сейчас|последн|новост|погод|курс валют|найди|поищи|актуальн|сколько стоит|свежие данные/i.test(text);
 }
 
 function safeHistory(history) {
@@ -107,7 +107,7 @@ async function searchWeb(query, timeoutMs) {
 
     const answerBox = data.answerBox?.answer || data.answerBox?.snippet;
     if (answerBox) items.unshift(`Краткий ответ поисковика: ${String(answerBox).slice(0, 350)}`);
-    return items.length ? items.join("\\n") : "";
+    return items.length ? items.join("\n") : "";
   } catch (error) {
     console.warn("Serper request did not finish in time; continuing without search.");
     return "";
@@ -128,7 +128,7 @@ async function askGemini(text, history, searchContext, timeoutMs) {
   }));
 
   const prompt = searchContext
-    ? `${text}\\n\\nРезультаты поиска в интернете:\\n${searchContext}\\nИспользуй их только там, где они относятся к вопросу.`
+    ? `${text}\n\nРезультаты поиска в интернете:\n${searchContext}\nИспользуй их только там, где они относятся к вопросу.`
     : text;
   contents.push({ role: "user", parts: [{ text: prompt }] });
 
