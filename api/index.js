@@ -57,8 +57,8 @@ function safeUserState(value) {
 }
 
 function memoryFactKey(fact) {
-  const value = String(fact || "").trim().toLowerCase();
-  if (/^(?:мой\s+)?любимый\s+цвет\b/i.test(value)) return "favorite-color";
+  const value = normalizeMemoryText(fact);
+  if (/(?:^|\s)(?:мой\s+)?любимый\s+цвет(?:\s|$)/i.test(value)) return "favorite-color";
   return "";
 }
 
@@ -110,7 +110,7 @@ function updateUserMemory(previousState, userText) {
     if (/любим(?:ый|ая)\s+цвет/.test(oldFact)) {
       const color = newFact.replace(/^(?:мой\s+)?любим(?:ый|ая)\s+цвет\s+/, "").trim();
       if (color) {
-        state.memory = state.memory.filter(item => memoryFactKey(item) !== "favorite-color");
+        state.memory = state.memory.filter(item => !/(?:^|\s)(?:мой\s+)?любимый\s+цвет(?:\s|$)/i.test(normalizeMemoryText(item)));
         state.memory.push("мой любимый цвет " + color);
       }
     } else {
@@ -159,7 +159,7 @@ function memoryCommandAnswer(text, state) {
   if (isForgetMemoryCommand(text)) {
     return "Хорошо, личная память очищена.";
   }
-  const normalizedCommand = normalizeMemoryText(text).replace(/^алиса\s+/, "");
+  const normalizedCommand = normalizeMemoryText(text).replace(/^алиса\s*/, "");
   if (/^(?:забудь|удали из памяти|замени)\b/.test(normalizedCommand)) {
     return "Хорошо, обновила память.";
   }
