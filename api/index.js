@@ -53,6 +53,14 @@ function isSearchIntent(text) {
   return /\b(latest|today|current|news|weather|price|exchange rate|recent|search|look up)\b|сегодня|сейчас|последн|новост|погод|курс валют|найди|поищи|актуальн|сколько стоит|свежие данные/i.test(text);
 }
 
+function isNewsIntent(text) {
+  return /новост|news|событи.{0,20}сегодня/i.test(text);
+}
+
+function isTechnologyNewsIntent(text) {
+  return isNewsIntent(text) && /технолог|техно|it[- ]?новост|искусственн.{0,10}интеллект|ai\b|гаджет|смартфон|кибербезопасност|программ|разработк/i.test(text);
+}
+
 function safeHistory(history) {
   if (!Array.isArray(history)) return [];
   return history
@@ -73,20 +81,26 @@ async function fetchJson(url, options, timeoutMs) {
   }
 }
 
-async function searchWeb(query, timeoutMs) {
+async function searchWeb(query, timeoutMs, options = {}) {
   const key = process.env.SERPER_API_KEY;
   if (!key || timeoutMs < 150) return "";
 
   try {
     const { response, data } = await fetchJson(
-      "https://google.serper.dev/search",
+      options.news ? "https://google.serper.dev/news" : "https://google.serper.dev/search",
       {
         method: "POST",
         headers: {
           "X-API-KEY": key,
           "Content-Type": "application/json"
         },
-        body: JSON.stringify({ q: query, gl: "ru", hl: "ru", num: 3 })
+        body: JSON.stringify({
+          q: query,
+          gl: "ru",
+          hl: "ru",
+          num: 5,
+          ...(options.news ? { tbs: "qdr:d" } : {})
+        })
       },
       Math.min(SERPER_TIMEOUT_MS, timeoutMs)
     );
@@ -108,13 +122,20 @@ async function searchWeb(query, timeoutMs) {
       return "";
     }
 
-    const items = (Array.isArray(data.organic) ? data.organic : [])
-      .slice(0, 3)
+    const sourceItems = options.news
+      ? (Array.isArray(data.news) ? data.news : [])
+      : (Array.isArray(data.organic) ? data.organic : []);
+    const items = sourceItems
+      .slice(0, options.news ? 5 : 3)
       .map((item, i) => {
         const title = String(item.title || "").slice(0, 180);
         const snippet = String(item.snippet || "").slice(0, 350);
         const link = String(item.link || "").slice(0, 240);
-        return `${i + 1}. ${title}: ${snippet} ${link}`.trim();
+        const source = String(item.source || "").slice(0, 100);
+        const date = String(item.date || "").slice(0, 80);
+        return options.news
+          ? `${i + 1}. ${title}. Источник: ${source || "не указан"}. Дата: ${date || "не указана"}. ${snippet} Ссылка: ${link}`.trim()
+          : `${i + 1}. ${title}: ${snippet} ${link}`.trim();
       });
 
     const answerBox = data.answerBox?.answer || data.answerBox?.snippet;
@@ -238,7 +259,18 @@ export default async function handler(req, res) {
     let searchContext = "";
     if (isSearchIntent(text) && process.env.SERPER_API_KEY) {
       // Search has a very short budget because Alice expects a response within 4.5 seconds.
-      searchContext = await searchWeb(text, Math.min(SERPER_TIMEOUT_MS, Math.max(0, remainingMs() - 2600)));
+      const technologyNews = isTechnologyNewsIntent(text);
+      const newsSearch = isNewsIntent(text);
+      const searchQuery = technologyNews
+        ? "новости технологий IT искусственный интеллект гаджеты кибербезопасность за последние 24 часа"
+        : newsSearch
+          ? `новости за последние 24 часа ${text}`
+          : text;
+      searchContext = await searchWeb(
+        searchQuery,
+        Math.min(SERPER_TIMEOUT_MS, Math.max(0, remainingMs() - 2600)),
+        { news: newsSearch }
+      );
     }
 
     const answer = await askGemini(
