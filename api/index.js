@@ -243,8 +243,9 @@ function formatNewsAnswer(searchContext) {
     if (!prefix || sourceAt < 0 || dateAt < 0 || linkAt < 0 || linkAt <= dateAt) return "";
     const title = line.slice(prefix.length, sourceAt).trim().slice(0, 110);
     const source = line.slice(sourceAt + sourceMarker.length, dateAt).trim().slice(0, 45);
-    const dateEnd = line.indexOf(".", dateAt + dateMarker.length);
-    const date = line.slice(dateAt + dateMarker.length, dateEnd < 0 ? linkAt : dateEnd).trim().slice(0, 40);
+    const dateText = line.slice(dateAt + dateMarker.length, linkAt);
+    const dateMatch = dateText.match(/\\d{1,2}\\.\\d{1,2}\\.\\d{4}(?:,\\s*\\d{1,2}:\\d{2}(?::\\d{2})?)?|[A-Z][a-z]{2,8}\\s+\\d{1,2},?\\s+\\d{4}|\\d+\\s+(?:minutes?|hours?|days?)\\s+ago/i);
+    const date = (dateMatch?.[0] || dateText.split(". ")[0]).trim().slice(0, 40);
     const url = line.slice(linkAt + linkMarker.length).trim();
     if (!title || !url) return "";
     return (index + 1) + ". " + title + " — " + (date || "дата не указана") + "; " + (source || "источник не указан") + ". Ссылка: " + url;
