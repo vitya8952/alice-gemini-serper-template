@@ -88,8 +88,8 @@ async function searchWeb(query, timeoutMs, options = {}) {
 
   const attempts = options.news
     ? [
-        { query, gl: "ru", hl: "ru", dateFilter: true },
         { query, gl: "ru", hl: "ru", dateFilter: false },
+        { query, gl: "ru", hl: "ru", dateFilter: true },
         { query: "technology artificial intelligence gadgets cybersecurity", gl: "us", hl: "en", dateFilter: false }
       ]
     : [{ query, gl: "ru", hl: "ru", dateFilter: false }];
