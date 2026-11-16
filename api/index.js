@@ -2,8 +2,8 @@ const DEFAULT_MODEL = "gemini-3.5-flash-lite";
 const MAX_HISTORY_MESSAGES = 8;
 const MAX_HISTORY_MESSAGE_CHARS = 1200;
 const MAX_ALICE_TEXT = 1024;
-const TOTAL_RESPONSE_BUDGET_MS = 3600;
-const SERPER_TIMEOUT_MS = 1000;
+const TOTAL_RESPONSE_BUDGET_MS = 4300;
+const SERPER_TIMEOUT_MS = 1500;
 const GEMINI_TIMEOUT_MS = 2500;
 
 const SYSTEM_PROMPT = [
@@ -82,6 +82,7 @@ async function fetchJson(url, options, timeoutMs) {
 }
 
 async function searchWeb(query, timeoutMs, options = {}) {
+  const searchStartedAt = Date.now();
   const key = process.env.SERPER_API_KEY;
   if (!key || timeoutMs < 150) return "";
 
@@ -138,11 +139,21 @@ async function searchWeb(query, timeoutMs, options = {}) {
           : `${i + 1}. ${title}: ${snippet} ${link}`.trim();
       });
 
+    console.info("Serper search completed:", {
+      status: Number(response.status),
+      resultCount: items.length,
+      news: Boolean(options.news),
+      elapsedMs: Date.now() - searchStartedAt
+    });
+
     const answerBox = data.answerBox?.answer || data.answerBox?.snippet;
     if (answerBox) items.unshift(`Краткий ответ поисковика: ${String(answerBox).slice(0, 350)}`);
     return items.length ? items.join("\n") : "";
   } catch (error) {
-    console.warn("Serper request did not finish in time; continuing without search.");
+    console.warn("Serper search failed:", {
+      error: String(error?.name || error?.message || "unknown").slice(0, 120),
+      elapsedMs: Date.now() - searchStartedAt
+    });
     return "";
   }
 }
