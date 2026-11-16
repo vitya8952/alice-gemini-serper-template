@@ -70,11 +70,51 @@ function isForgetMemoryCommand(text) {
   return /^(?:забудь все(?: что ты (?:знаешь|помнишь) обо мне)?|забудь все что ты обо мне (?:знаешь|помнишь)|удали всю память|очисти память)$/.test(normalized);
 }
 
+function normalizeMemoryText(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/ё/g, "е")
+    .replace(/[.,!?]/g, " ")
+    .replace(/\\s+/g, " ")
+    .trim();
+}
+
 function updateUserMemory(previousState, userText) {
   const state = safeUserState(previousState);
   const text = String(userText || "").trim();
+  const normalized = normalizeMemoryText(text);
   if (isForgetMemoryCommand(text)) {
     return { memory: [] };
+  }
+
+  // Remove only the fact explicitly named by the user.
+  const forgetMatch = normalized.match(/^(?:алиса )?(?:забудь|удали из памяти) (?:что )?(.{3,180})$/);
+  if (forgetMatch) {
+    const target = forgetMatch[1];
+    state.memory = state.memory.filter(item => {
+      const fact = normalizeMemoryText(item);
+      return !(fact === target || fact.startsWith(target + " ") || target.startsWith(fact + " "));
+    });
+    return safeUserState(state);
+  }
+
+  // Replace a fact only when the user explicitly asks to replace it.
+  const replaceMatch = normalized.match(/^(?:алиса )?замени (.{2,100}?) на (.{2,100})$/);
+  if (replaceMatch) {
+    const oldFact = replaceMatch[1];
+    const newFact = replaceMatch[2];
+    if (/любим(?:ый|ая) цвет/.test(oldFact)) {
+      state.memory = state.memory.filter(item => memoryFactKey(item) !== "favorite-color");
+      state.memory.push("мой любимый цвет " + newFact.replace(/^(?:мой )?любим(?:ый|ая) цвет /, ""));
+    } else {
+      state.memory = state.memory.map(item => {
+        const position = item.toLowerCase().indexOf(oldFact);
+        return position < 0
+          ? item
+          : item.slice(0, position) + newFact + item.slice(position + oldFact.length);
+      });
+    }
+    return safeUserState(state);
   }
 
   if (/без сарказма|не используй сарказм|без подколов/i.test(text)) {
@@ -82,7 +122,7 @@ function updateUserMemory(previousState, userText) {
     state.memory.push("Предпочитает спокойное, доброжелательное общение без сарказма и подколов.");
   }
 
-  const rememberMatch = text.match(/^(?:алиса[, ]*)?(?:запомни|сохрани в памяти)(?:,?\s+что)?\s+(.{3,180})$/i);
+  const rememberMatch = text.match(/^(?:алиса[, ]*)?(?:запомни|сохрани в памяти)(?:,?\\s+что)?\\s+(.{3,180})$/i);
   if (rememberMatch && !/(парол|пин-код|номер карты|паспорт|диагноз|болезн|лекарств|религи|политическ|сексуальн)/i.test(rememberMatch[1])) {
     const fact = rememberMatch[1].replace(/[.!?]+$/, "").trim();
     if (fact) {
@@ -90,7 +130,7 @@ function updateUserMemory(previousState, userText) {
       if (newKey) {
         state.memory = state.memory.filter(item => memoryFactKey(item) !== newKey);
       }
-      if (!state.memory.some(item => item.toLowerCase() === fact.toLowerCase())) {
+      if (!state.memory.some(item => normalizeMemoryText(item) === normalizeMemoryText(fact))) {
         state.memory.push(fact);
       }
     }
@@ -111,6 +151,9 @@ function memoryCommandAnswer(text, state) {
   }
   if (isForgetMemoryCommand(text)) {
     return "Хорошо, личная память очищена.";
+  }
+  if (/^(?:алиса[, ]*)?(?:забудь|удали из памяти|замени)\\b/i.test(String(text || "").trim())) {
+    return "Хорошо, обновила память.";
   }
   if (/^(?:алиса[, ]*)?(?:запомни|сохрани в памяти)/i.test(String(text || "").trim())) {
     return state.memory.length
