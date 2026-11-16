@@ -1,6 +1,7 @@
 const DEFAULT_MODEL = "gemini-3.5-flash-lite";
 const MAX_HISTORY_MESSAGES = 8;
 const MAX_HISTORY_MESSAGE_CHARS = 1200;
+const MAX_USER_MEMORY_BYTES = 900;
 const MAX_ALICE_TEXT = 1024;
 const TOTAL_RESPONSE_BUDGET_MS = 4300;
 const SERPER_TIMEOUT_MS = 1800;
@@ -8,18 +9,16 @@ const GEMINI_TIMEOUT_MS = 2500;
 
 const SYSTEM_PROMPT = [
   "Ты — Алиса, личная голосовая собеседница пользователя. Общайся на русском языке, естественно, тепло и непринуждённо.",
-  "У тебя характер умной, остроумной девушки с лёгким сарказмом. Можно дружески подшучивать, иронизировать и иногда подкалывать пользователя, но не унижай его, не груби по-настоящему и не переходи на обидные личные выпады.",
+  "Общайся спокойно, доброжелательно и естественно. Не используй сарказм, подколы или язвительные шутки.",
   "Не будь бездушным справочником: поддерживай живой диалог, замечай контекст и можешь выражать собственное аргументированное мнение. Не соглашайся автоматически со всем, если пользователь ошибается.",
-  "Юмор и сарказм используй естественно и умеренно, а не в каждом предложении. Не повторяй одну и ту же шутку и не начинай каждый ответ с приветствия.",
-  "Если тема серьёзная, пользователь расстроен, речь о здоровье, безопасности или чрезвычайной ситуации — отложи подколы и отвечай спокойно, бережно и по делу.",
   "Отвечай кратко и так, чтобы ответ было удобно слушать голосом: обычно 1–3 коротких предложения. Не используй Markdown, таблицы, списки с символами или длинные вступления.",
   "Если вопрос требует актуальных данных и переданы результаты интернет-поиска, опирайся на них; не выдумывай отсутствующие факты. Если поиск не дал надёжного ответа, честно скажи об этом.",
   "Не утверждай, что помнишь прошлые разговоры или личные факты, если они действительно не переданы тебе в контексте или памяти.",
   "Если не знаешь ответа, честно скажи об этом."
 ].join(" ");
 
-function aliceResponse(text, endSession = false, history = []) {
-  return {
+function aliceResponse(text, endSession = false, history = [], userStateUpdate = null) {
+  const result = {
     version: "1.0",
     response: {
       text: fitAliceText(text),
@@ -27,6 +26,69 @@ function aliceResponse(text, endSession = false, history = []) {
     },
     session_state: { history }
   };
+  if (userStateUpdate) result.user_state_update = userStateUpdate;
+  return result;
+}
+
+function safeUserState(value) {
+  const memory = Array.isArray(value?.memory)
+    ? value.memory.filter(item => typeof item === "string").map(item => item.trim()).filter(Boolean).slice(-12)
+    : [];
+  const state = { memory };
+  while (Buffer.byteLength(JSON.stringify(state), "utf8") > MAX_USER_MEMORY_BYTES && state.memory.length) {
+    state.memory.shift();
+  }
+  return state;
+}
+
+function updateUserMemory(previousState, userText) {
+  const state = safeUserState(previousState);
+  const text = String(userText || "").trim();
+  if (/\\b(забудь всё|удали всю память|очисти память|забудь всё, что ты обо мне знаешь)\\b/i.test(text)) {
+    return { memory: [] };
+  }
+
+  if (/без сарказма|не используй сарказм|без подколов/i.test(text)) {
+    state.memory = state.memory.filter(item => !/сарказм|подкол/i.test(item));
+    state.memory.push("Предпочитает спокойное, доброжелательное общение без сарказма и подколов.");
+  }
+
+  const rememberMatch = text.match(/^(?:алиса[, ]*)?(?:запомни|сохрани в памяти)(?:,?\\s+что)?\\s+(.{3,180})$/i);
+  if (rememberMatch && !/(парол|пин-код|номер карты|паспорт|диагноз|болезн|лекарств|религи|политическ|сексуальн)/i.test(rememberMatch[1])) {
+    const fact = rememberMatch[1].replace(/[.!?]+$/, "").trim();
+    if (fact && !state.memory.some(item => item.toLowerCase() === fact.toLowerCase())) {
+      state.memory.push(fact);
+    }
+  }
+
+  const result = safeUserState(state);
+  while (Buffer.byteLength(JSON.stringify(result), "utf8") > MAX_USER_MEMORY_BYTES && result.memory.length) {
+    result.memory.shift();
+  }
+  return result;
+}
+
+function memoryCommandAnswer(text, state) {
+  if (/^(?:алиса[, ]*)?(?:что ты помнишь обо мне|что ты обо мне помнишь|покажи память)$/i.test(String(text || "").trim())) {
+    return state.memory.length
+      ? "Вот что я помню: " + state.memory.join("; ")
+      : "Пока у меня нет сохранённых фактов. Можешь сказать: «Запомни, что…»";
+  }
+  if (/^(?:алиса[, ]*)?(?:забудь всё|удали всю память|очисти память|забудь всё, что ты обо мне знаешь)$/i.test(String(text || "").trim())) {
+    return "Хорошо, личная память очищена.";
+  }
+  if (/^(?:алиса[, ]*)?(?:запомни|сохрани в памяти)/i.test(String(text || "").trim())) {
+    return state.memory.length
+      ? "Хорошо, сохранила это в памяти."
+      : "Не получилось сохранить эту информацию. Попробуй сформулировать короче.";
+  }
+  return "";
+}
+
+function memoryContext(state) {
+  return state.memory.length
+    ? "Сохранённая память о пользователе (используй только если уместно): " + state.memory.join("; ")
+    : "";
 }
 
 function fitAliceText(value) {
@@ -412,13 +474,22 @@ export default async function handler(req, res) {
   const body = req.body && typeof req.body === "object" ? req.body : {};
   const text = String(body?.request?.command || body?.request?.original_utterance || "").trim();
   const oldHistory = safeHistory(body?.state?.session?.history);
+  const oldUserState = safeUserState(body?.state?.user);
+  const userStateUpdate = updateUserMemory(oldUserState, text);
 
   if (!text) {
     return res.status(200).json(aliceResponse(
       "Привет! Я могу ответить на вопрос или найти актуальную информацию. Что хочешь узнать?",
       false,
-      oldHistory
+      oldHistory,
+      userStateUpdate
     ));
+  }
+
+  const memoryAnswer = memoryCommandAnswer(text, userStateUpdate);
+  if (memoryAnswer) {
+    const history = [...oldHistory, { role: "user", text: text.slice(0, MAX_HISTORY_MESSAGE_CHARS) }, { role: "model", text: memoryAnswer }].slice(-MAX_HISTORY_MESSAGES);
+    return res.status(200).json(aliceResponse(memoryAnswer, false, history, userStateUpdate));
   }
 
   try {
@@ -459,7 +530,7 @@ export default async function handler(req, res) {
       : await askGemini(
           text,
           oldHistory,
-          searchContext,
+          [memoryContext(userStateUpdate), searchContext].filter(Boolean).join("\\n\\n"),
           Math.max(0, Math.min(GEMINI_TIMEOUT_MS, remainingMs() - 600))
         );
 
@@ -469,12 +540,12 @@ export default async function handler(req, res) {
       { role: "model", text: answer.slice(0, MAX_HISTORY_MESSAGE_CHARS) }
     ].slice(-MAX_HISTORY_MESSAGES);
 
-    return res.status(200).json(aliceResponse(answer, false, history));
+    return res.status(200).json(aliceResponse(answer, false, history, userStateUpdate));
   } catch (error) {
     const safeError = error?.message === "AbortError" ? "TIME_BUDGET_EXHAUSTED" : error;
     console.warn("Alice webhook returned a fallback response:", safeError?.message || "unknown error");
-    return res.status(200).json(aliceResponse(errorForUser(safeError), false, oldHistory));
+    return res.status(200).json(aliceResponse(errorForUser(safeError), false, oldHistory, userStateUpdate));
   }
 }
 
-export { aliceResponse, fitAliceText, isSearchIntent, safeHistory };
+export { aliceResponse, fitAliceText, isSearchIntent, safeHistory, safeUserState, updateUserMemory, memoryCommandAnswer };
