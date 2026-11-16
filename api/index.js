@@ -1,21 +1,29 @@
 const DEFAULT_MODEL = "gemini-3.5-flash-lite";
-const MAX_HISTORY_MESSAGES = 8;
+const MAX_HISTORY_MESSAGES = 10;
 const MAX_HISTORY_MESSAGE_CHARS = 1200;
+const MAX_USER_MEMORY_BYTES = 900;
 const MAX_ALICE_TEXT = 1024;
-const TOTAL_RESPONSE_BUDGET_MS = 3600;
-const SERPER_TIMEOUT_MS = 600;
+const TOTAL_RESPONSE_BUDGET_MS = 4300;
+const SERPER_TIMEOUT_MS = 1800;
 const GEMINI_TIMEOUT_MS = 2500;
 
 const SYSTEM_PROMPT = [
-  "Ты — полезный голосовой помощник в навыке Яндекс Алисы.",
-  "Отвечай естественно, по-русски, кратко и так, чтобы ответ было удобно слушать.",
-  "Обычно используй 1–3 коротких предложения. Не используй Markdown, таблицы, списки с символами или длинные вступления.",
-  "Если вопрос требует актуальных данных и переданы результаты поиска, опирайся на них; не выдумывай отсутствующие факты.",
+  "Ты — Алиса, личная голосовая собеседница пользователя. Общайся на русском языке, естественно, тепло и непринуждённо.",
+  "Общайся спокойно, доброжелательно и естественно. Не используй сарказм, подколы или язвительные шутки.",
+  "Не будь бездушным справочником: поддерживай живой диалог, замечай контекст и можешь выражать собственное аргументированное мнение. Не соглашайся автоматически со всем, если пользователь ошибается.",
+  "Учитывай последние сообщения диалога: понимай короткие ответы, уточнения и ссылки вроде «это», «там», «он» по предыдущему контексту. Не проси повторить уже сообщённое. Если контекста действительно недостаточно, задай один короткий уточняющий вопрос.",
+  "Сохранённые сведения о пользователе используй естественно и только когда они помогают ответить. Не перечисляй их без просьбы, не делай из них лишних выводов и не выдавай предположения за факты.",
+  "Не притягивай сохранённые факты к теме искусственно: любимый цвет, имя или другие личные сведения не должны влиять на рекомендации, если пользователь сам не связал их с вопросом.",
+    "В рекомендациях по играм сначала выясни недостающие ключевые условия. Если предложил несколько героев, а пользователь спрашивает о предметах и не выбрал героя, не угадывай: задай один короткий вопрос, за кого он решил играть. Если уместно, можешь дать отдельные варианты для каждого названного героя.",
+    "Когда советуешь игровые сборки, отделяй рекомендации для разных героев и учитывай роль, состав противников и текущую ситуацию, если эти сведения известны. Не выдавай один универсальный набор за безусловно лучший.",
+  "Отвечай кратко и так, чтобы ответ было удобно слушать голосом: обычно 1–3 коротких предложения. Не используй Markdown, таблицы, списки с символами или длинные вступления.",
+  "Если вопрос требует актуальных данных и переданы результаты интернет-поиска, опирайся на них; не выдумывай отсутствующие факты. Если поиск не дал надёжного ответа, честно скажи об этом.",
+  "Не утверждай, что помнишь прошлые разговоры или личные факты, если они действительно не переданы тебе в контексте или памяти.",
   "Если не знаешь ответа, честно скажи об этом."
 ].join(" ");
 
-function aliceResponse(text, endSession = false, history = []) {
-  return {
+function aliceResponse(text, endSession = false, history = [], userStateUpdate = null) {
+  const result = {
     version: "1.0",
     response: {
       text: fitAliceText(text),
@@ -23,6 +31,155 @@ function aliceResponse(text, endSession = false, history = []) {
     },
     session_state: { history }
   };
+  if (userStateUpdate) result.user_state_update = { value: userStateUpdate };
+  return result;
+}
+
+function safeUserState(value) {
+  // Yandex Dialogs stores persistent user data under state.user.value.
+  // Accept the direct shape too, for compatibility with older stored state.
+  const source = value?.value && typeof value.value === "object" ? value.value : value;
+  const incoming = Array.isArray(source?.memory)
+    ? source.memory.filter(item => typeof item === "string").map(item => item.trim()).filter(Boolean)
+    : [];
+  const memory = [];
+  for (const item of incoming) {
+    const key = memoryFactKey(item);
+    if (key) {
+      for (let i = memory.length - 1; i >= 0; i--) {
+        if (memoryFactKey(memory[i]) === key) memory.splice(i, 1);
+      }
+    }
+    const duplicateIndex = memory.findIndex(existing => existing.toLowerCase() === item.toLowerCase());
+    if (duplicateIndex >= 0) memory.splice(duplicateIndex, 1);
+    memory.push(item);
+  }
+  const state = { memory: memory.slice(-12) };
+  while (Buffer.byteLength(JSON.stringify(state), "utf8") > MAX_USER_MEMORY_BYTES && state.memory.length) {
+    state.memory.shift();
+  }
+  return state;
+}
+
+function memoryFactKey(fact) {
+  const value = normalizeMemoryText(fact);
+  if (/(?:^|\s)(?:мой\s+)?любимый\s+цвет(?:\s|$)/i.test(value)) return "favorite-color";
+  return "";
+}
+
+function isForgetMemoryCommand(text) {
+  const normalized = String(text || "")
+    .toLowerCase()
+    .replace(/ё/g, "е")
+    .replace(/[.,!?]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/^(?:алиса[, ]*)/, "");
+  return /^(?:забудь все(?: что ты (?:знаешь|помнишь) обо мне)?|забудь все что ты обо мне (?:знаешь|помнишь)|удали всю память|очисти память)$/.test(normalized);
+}
+
+function normalizeMemoryText(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/ё/g, "е")
+    .replace(/[.,!?]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function updateUserMemory(previousState, userText) {
+  const state = safeUserState(previousState);
+  const text = String(userText || "").trim();
+  const normalized = normalizeMemoryText(text);
+  if (isForgetMemoryCommand(text)) {
+    return { memory: [] };
+  }
+
+  // Remove only the fact explicitly named by the user.
+  const forgetMatch = normalized.match(/^(?:алиса )?(?:забудь|удали из памяти) (?:что )?(.{3,180})$/);
+  if (forgetMatch) {
+    const target = forgetMatch[1];
+    state.memory = state.memory.filter(item => {
+      const fact = normalizeMemoryText(item);
+      return !(fact === target || fact.startsWith(target + " ") || target.startsWith(fact + " "));
+    });
+    return safeUserState(state);
+  }
+
+  // Replace a fact only when the user explicitly asks to replace it.
+  // Allow a short conversational prefix before "замени".
+  const replaceMatch = normalized.match(/(?:^|\s)замени\s+(.{2,100}?)\s+на\s+(.{2,100})$/);
+  if (replaceMatch) {
+    const oldFact = replaceMatch[1].trim();
+    const newFact = replaceMatch[2].trim();
+    if (/любим(?:ый|ая)\s+цвет/.test(oldFact)) {
+      const color = newFact.replace(/^(?:мой\s+)?любим(?:ый|ая)\s+цвет\s+/, "").trim();
+      if (color) {
+        state.memory = state.memory.filter(item => !/(?:^|\s)(?:мой\s+)?любимый\s+цвет(?:\s|$)/i.test(normalizeMemoryText(item)));
+        state.memory.push("мой любимый цвет " + color);
+      }
+    } else {
+      state.memory = state.memory.map(item => {
+        const position = normalizeMemoryText(item).indexOf(oldFact);
+        return position < 0
+          ? item
+          : item.slice(0, position) + newFact + item.slice(position + oldFact.length);
+      });
+    }
+    return safeUserState(state);
+  }
+
+  if (/без сарказма|не используй сарказм|без подколов/i.test(text)) {
+    state.memory = state.memory.filter(item => !/сарказм|подкол/i.test(item));
+    state.memory.push("Предпочитает спокойное, доброжелательное общение без сарказма и подколов.");
+  }
+
+  const rememberMatch = text.match(/^(?:алиса[, ]*)?(?:запомни|сохрани в памяти)(?:,?\s+что)?\s+(.{3,180})$/i);
+  if (rememberMatch && !/(парол|пин-код|номер карты|паспорт|диагноз|болезн|лекарств|религи|политическ|сексуальн)/i.test(rememberMatch[1])) {
+    const fact = rememberMatch[1].replace(/[.!?]+$/, "").trim();
+    if (fact) {
+      const newKey = memoryFactKey(fact);
+      if (newKey) {
+        state.memory = state.memory.filter(item => memoryFactKey(item) !== newKey);
+      }
+      if (!state.memory.some(item => normalizeMemoryText(item) === normalizeMemoryText(fact))) {
+        state.memory.push(fact);
+      }
+    }
+  }
+
+  const result = safeUserState(state);
+  while (Buffer.byteLength(JSON.stringify(result), "utf8") > MAX_USER_MEMORY_BYTES && result.memory.length) {
+    result.memory.shift();
+  }
+  return result;
+}
+
+function memoryCommandAnswer(text, state) {
+  if (/^(?:алиса[, ]*)?(?:что ты помнишь обо мне|что ты обо мне помнишь|покажи память)$/i.test(String(text || "").trim())) {
+    return state.memory.length
+      ? "Вот что я помню: " + state.memory.join("; ")
+      : "Пока у меня нет сохранённых фактов. Можешь сказать: «Запомни, что…»";
+  }
+  if (isForgetMemoryCommand(text)) {
+    return "Хорошо, личная память очищена.";
+  }
+  const normalizedCommand = normalizeMemoryText(text).replace(/^алиса\s*/, "");
+  if (/^(?:забудь|удали из памяти|замени)\b/.test(normalizedCommand)) {
+    return "Хорошо, обновила память.";
+  }
+  if (/^(?:алиса[, ]*)?(?:запомни|сохрани в памяти)/i.test(String(text || "").trim())) {
+    return state.memory.length
+      ? "Хорошо, сохранила это в памяти."
+      : "Не получилось сохранить эту информацию. Попробуй сформулировать короче.";
+  }
+  return "";
+}
+
+function memoryContext(state) {
+  return state.memory.length
+    ? "Сохранённая память о пользователе (используй только если уместно): " + state.memory.join("; ")
+    : "";
 }
 
 function fitAliceText(value) {
@@ -49,6 +206,14 @@ function isSearchIntent(text) {
   return /\b(latest|today|current|news|weather|price|exchange rate|recent|search|look up)\b|сегодня|сейчас|последн|новост|погод|курс валют|найди|поищи|актуальн|сколько стоит|свежие данные/i.test(text);
 }
 
+function isNewsIntent(text) {
+  return /новост|news|событи.{0,20}сегодня/i.test(text);
+}
+
+function isTechnologyNewsIntent(text) {
+  return isNewsIntent(text) && /технолог|техно|it[- ]?новост|искусственн.{0,10}интеллект|ai\b|гаджет|смартфон|кибербезопасност|программ|разработк/i.test(text);
+}
+
 function safeHistory(history) {
   if (!Array.isArray(history)) return [];
   return history
@@ -69,48 +234,239 @@ async function fetchJson(url, options, timeoutMs) {
   }
 }
 
-async function searchWeb(query, timeoutMs) {
-  const key = process.env.SERPER_API_KEY;
-  if (!key || timeoutMs < 150) return "";
-
+async function searchGoogleNewsRss(query, timeoutMs) {
+  if (timeoutMs < 250) return "";
+  const startedAt = Date.now();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), Math.max(250, timeoutMs));
   try {
-    const { response, data } = await fetchJson(
-      "https://google.serper.dev/search",
-      {
-        method: "POST",
-        headers: {
-          "X-API-KEY": key,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({ q: query, gl: "ru", hl: "ru", num: 3 })
-      },
-      Math.min(SERPER_TIMEOUT_MS, timeoutMs)
-    );
-
+    const url = "https://news.google.com/rss/search?q=" +
+      encodeURIComponent(query + " when:1d") +
+      "&hl=ru&gl=RU&ceid=RU:ru";
+    const response = await fetch(url, {
+      headers: { "User-Agent": "Mozilla/5.0 (compatible; AliceNewsBot/1.0)" },
+      signal: controller.signal
+    });
+    const xml = await response.text();
     if (!response.ok) {
-      console.warn("Serper request failed with HTTP", response.status);
+      console.warn("Google News RSS failed:", { status: response.status, elapsedMs: Date.now() - startedAt });
       return "";
     }
+    const decode = value => String(value || "")
+      .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1")
+      .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+      .replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'");
+    const allEntries = [...xml.matchAll(/<item>([\s\S]*?)<\/item>/gi)];
+    const entries = allEntries.slice(0, 5);
+    console.info("Google News RSS parsed:", { status: Number(response.status), responseBytes: Buffer.byteLength(xml, "utf8"), entryCount: allEntries.length });
+    const parsedItems = entries.map((match, index) => {
+      const block = match[1];
+      const field = name => {
+        const found = block.match(new RegExp("<" + name + ">([\s\\S]*?)</" + name + ">", "i"));
+        return found ? decode(found[1]).trim() : "";
+      };
+      const title = field("title").slice(0, 180);
+      const link = field("link").slice(0, 500);
+      const pubDate = field("pubDate");
+      const date = pubDate ? new Date(pubDate).toLocaleString("ru-RU", { timeZone: "Europe/Warsaw" }) : "не указана";
+      return title && link ? { index, title, link, date } : null;
+    }).filter(Boolean).slice(0, 3);
 
-    const items = (Array.isArray(data.organic) ? data.organic : [])
-      .slice(0, 3)
-      .map((item, i) => {
-        const title = String(item.title || "").slice(0, 180);
-        const snippet = String(item.snippet || "").slice(0, 350);
-        const link = String(item.link || "").slice(0, 240);
-        return `${i + 1}. ${title}: ${snippet} ${link}`.trim();
-      });
+    // Resolve modern Google News article IDs through Google's batchexecute RPC.
+    const resolveGoogleNewsUrl = async (googleUrl) => {
+      const id = googleUrl.match(/\/(?:rss\/)?articles\/([^/?]+)/i)?.[1];
+      if (!id) return googleUrl;
+      const headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/128.0.0.0 Safari/537.36",
+        "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8",
+        "Cookie": "CONSENT=PENDING+987"
+      };
+      const pageController = new AbortController();
+      const pageTimer = setTimeout(() => pageController.abort(), 1050);
+      let html = "";
+      try {
+        const page = await fetch("https://news.google.com/rss/articles/" + id, {
+          redirect: "follow", signal: pageController.signal, headers
+        });
+        if (!page.ok) return googleUrl;
+        html = await page.text();
+      } finally {
+        clearTimeout(pageTimer);
+      }
+      const signature = html.match(/data-n-a-sg="([^"]+)"/)?.[1];
+      const timestamp = Number(html.match(/data-n-a-ts="(\d+)"/)?.[1]);
+      if (!signature || !Number.isFinite(timestamp) || !timestamp) return googleUrl;
+      const inner = JSON.stringify([
+        "garturlreq",
+        [["X", "X", ["X", "X"], null, null, 1, 1, "US:en", null, 1, null, null, null, null, null, 0, 1],
+          "X", "X", 1, [1, 1, 1], 1, 1, null, 0, 0, null, 0],
+        id, timestamp, signature
+      ]);
+      const body = "f.req=" + encodeURIComponent(JSON.stringify([[["Fbv4je", inner]]]));
+      const rpcController = new AbortController();
+      const rpcTimer = setTimeout(() => rpcController.abort(), 1050);
+      try {
+        const rpc = await fetch("https://news.google.com/_/DotsSplashUi/data/batchexecute", {
+          method: "POST", signal: rpcController.signal,
+          headers: {
+            ...headers,
+            "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+            "Origin": "https://news.google.com",
+            "Referer": "https://news.google.com/",
+            "X-Same-Domain": "1"
+          },
+          body
+        });
+        if (!rpc.ok) return googleUrl;
+        const raw = await rpc.text();
+        const splitAt = raw.indexOf("\n\n");
+        if (splitAt < 0) return googleUrl;
+        const frames = JSON.parse(raw.slice(splitAt + 2));
+        const frame = frames.find(entry => entry?.[0] === "wrb.fr" && entry?.[1] === "Fbv4je");
+        if (!frame?.[2]) return googleUrl;
+        const decoded = JSON.parse(frame[2]);
+        const target = decoded?.[1];
+        if (typeof target !== "string" || !/^https?:\/\//i.test(target)) return googleUrl;
+        const host = new URL(target).hostname;
+        return host === "news.google.com" ? googleUrl : target;
+      } finally {
+        clearTimeout(rpcTimer);
+      }
+    };
 
-    const answerBox = data.answerBox?.answer || data.answerBox?.snippet;
-    if (answerBox) items.unshift(`Краткий ответ поисковика: ${String(answerBox).slice(0, 350)}`);
-    return items.length ? items.join("\n") : "";
+    const items = await Promise.all(parsedItems.map(async item => {
+      let link = item.link;
+      try {
+        link = await resolveGoogleNewsUrl(item.link);
+      } catch (error) {
+        console.info("Google News URL decode skipped:", { index: item.index + 1, reason: String(error?.name || "error") });
+      }
+      const title = item.title.replace(/\s+/g, " ").trim().slice(0, 82);
+      return `${item.index + 1}. ${title} — ${item.date.split(",")[0]}. Ссылка: ${link}`;
+    }));
+    console.info("Google News RSS completed:", { resultCount: items.length, elapsedMs: Date.now() - startedAt });
+    return items.join("\n");
   } catch (error) {
-    console.warn("Serper request did not finish in time; continuing without search.");
+    console.warn("Google News RSS failed:", { error: String(error?.name || error?.message || "unknown").slice(0, 100), elapsedMs: Date.now() - startedAt });
     return "";
+  } finally {
+    clearTimeout(timer);
   }
 }
 
-async function askGemini(text, history, searchContext, timeoutMs) {
+async function searchWeb(query, timeoutMs, options = {}) {
+  const searchStartedAt = Date.now();
+  if (options.news) {
+    return await searchGoogleNewsRss(query, Math.min(1500, timeoutMs));
+  }
+  const key = process.env.SERPER_API_KEY;
+  if (!key || timeoutMs < 150) return "";
+
+  const attempts = options.news
+    ? [
+        { query, gl: "ru", hl: "ru", dateFilter: false },
+        { query, gl: "ru", hl: "ru", dateFilter: true },
+        { query: "technology artificial intelligence gadgets cybersecurity", gl: "us", hl: "en", dateFilter: false }
+      ]
+    : [{ query, gl: "ru", hl: "ru", dateFilter: false }];
+
+  try {
+    for (let attempt = 0; attempt < attempts.length; attempt++) {
+      const remaining = timeoutMs - (Date.now() - searchStartedAt);
+      if (remaining < 180) break;
+      const config = attempts[attempt];
+      const { response, data } = await fetchJson(
+        options.news ? "https://google.serper.dev/news" : "https://google.serper.dev/search",
+        {
+          method: "POST",
+          headers: {
+            "X-API-KEY": key,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            q: config.query,
+            gl: config.gl,
+            hl: config.hl,
+            num: 5,
+            ...(options.news && config.dateFilter ? { tbs: "qdr:d" } : {})
+          })
+        },
+        Math.min(SERPER_TIMEOUT_MS, remaining)
+      );
+
+      if (!response.ok) {
+        const providerMessage = String(
+          data?.message ||
+          data?.error?.message ||
+          (typeof data?.error === "string" ? data.error : "") ||
+          data?.errorCode ||
+          data?.code ||
+          "no provider message"
+        ).replace(/[\\r\\n\\t]+/g, " ").slice(0, 240);
+        console.warn("Serper request failed:", {
+          status: Number(response.status),
+          providerMessage,
+          attempt: attempt + 1
+        });
+        if (!options.news) return "";
+        continue;
+      }
+
+      const sourceItems = options.news
+        ? (Array.isArray(data.news) ? data.news : [])
+        : (Array.isArray(data.organic) ? data.organic : []);
+      console.info("Serper search attempt:", {
+        status: Number(response.status),
+        rawResultCount: sourceItems.length,
+        news: Boolean(options.news),
+        attempt: attempt + 1,
+        dateFilter: Boolean(config.dateFilter),
+        elapsedMs: Date.now() - searchStartedAt
+      });
+      if (!sourceItems.length && options.news) continue;
+
+      const items = sourceItems
+        .slice(0, options.news ? 5 : 3)
+        .map((item, i) => {
+          const title = String(item.title || "").slice(0, 180);
+          const snippet = String(item.snippet || "").slice(0, 350);
+          const link = String(item.link || "").slice(0, 240);
+          const source = String(item.source || "").slice(0, 100);
+          const date = String(item.date || "").slice(0, 80);
+          return options.news
+            ? `${i + 1}. ${title}. Источник: ${source || "не указан"}. Дата: ${date || "не указана"}. ${snippet} Ссылка: ${link}`.trim()
+            : `${i + 1}. ${title}: ${snippet} ${link}`.trim();
+        });
+
+      const answerBox = data.answerBox?.answer || data.answerBox?.snippet;
+      if (answerBox) items.unshift(`Краткий ответ поисковика: ${String(answerBox).slice(0, 350)}`);
+      return items.length ? items.join("\\n") : "";
+    }
+    console.warn("Serper returned no news after fallback attempts:", {
+      elapsedMs: Date.now() - searchStartedAt
+    });
+    return "";
+  } catch (error) {
+    console.warn("Serper search failed:", {
+      error: String(error?.name || error?.message || "unknown").slice(0, 120),
+      elapsedMs: Date.now() - searchStartedAt
+    });
+    return "";
+  }
+}
+function formatNewsAnswer(searchContext) {
+  const lines = String(searchContext || "").split(/\r?\n/).filter(Boolean).slice(0, 3);
+  const stories = lines.map((line, index) => {
+    const match = line.match(/^\d+\.\s*(.*?)\s+—\s+(\d{1,2}\.\d{1,2}\.\d{4})\.\s+Ссылка:\s+(https?:\/\/\S+)/);
+    if (!match) return "";
+    return (index + 1) + ". " + match[1].slice(0, 105) + " — " + match[2] + ". " + match[3];
+  }).filter(Boolean);
+  return stories.length === 3
+    ? "Три новости за сегодня: " + stories.join(" ")
+    : "Нашла новости, но не смогла надёжно извлечь все три ссылки и даты. Не буду их выдумывать.";
+}
+
+async function askGemini(text, history, searchContext, timeoutMs, savedMemoryContext = "") {
   const key = process.env.GEMINI_API_KEY;
   if (!key) throw new Error("MISSING_GEMINI_KEY");
   if (timeoutMs < 250) throw new Error("TIME_BUDGET_EXHAUSTED");
@@ -123,9 +479,14 @@ async function askGemini(text, history, searchContext, timeoutMs) {
     parts: [{ text: item.text }]
   }));
 
-  const prompt = searchContext
-    ? `${text}\n\nРезультаты поиска в интернете:\n${searchContext}\nИспользуй их только там, где они относятся к вопросу.`
-    : text;
+  const contextParts = [];
+  if (savedMemoryContext) {
+    contextParts.push(`Сохранённые сведения о пользователе:\n${savedMemoryContext}\nИспользуй их только если они уместны для текущего вопроса.`);
+  }
+  if (searchContext) {
+    contextParts.push(`Результаты поиска в интернете:\n${searchContext}\nОпирайся на них только там, где они относятся к вопросу.`);
+  }
+  const prompt = [text, ...contextParts].join("\n\n");
   contents.push({ role: "user", parts: [{ text: prompt }] });
 
   const { response, data } = await fetchJson(
@@ -209,28 +570,66 @@ export default async function handler(req, res) {
   const body = req.body && typeof req.body === "object" ? req.body : {};
   const text = String(body?.request?.command || body?.request?.original_utterance || "").trim();
   const oldHistory = safeHistory(body?.state?.session?.history);
+  const oldUserState = safeUserState(body?.state?.user?.value ?? body?.state?.user);
+  const userStateUpdate = updateUserMemory(oldUserState, text);
 
   if (!text) {
     return res.status(200).json(aliceResponse(
       "Привет! Я могу ответить на вопрос или найти актуальную информацию. Что хочешь узнать?",
       false,
-      oldHistory
+      oldHistory,
+      userStateUpdate
     ));
+  }
+
+  const memoryAnswer = memoryCommandAnswer(text, userStateUpdate);
+  if (memoryAnswer) {
+    const history = [...oldHistory, { role: "user", text: text.slice(0, MAX_HISTORY_MESSAGE_CHARS) }, { role: "model", text: memoryAnswer }].slice(-MAX_HISTORY_MESSAGES);
+    return res.status(200).json(aliceResponse(memoryAnswer, false, history, userStateUpdate));
   }
 
   try {
     let searchContext = "";
-    if (isSearchIntent(text) && process.env.SERPER_API_KEY) {
-      // Search has a very short budget because Alice expects a response within 4.5 seconds.
-      searchContext = await searchWeb(text, Math.min(SERPER_TIMEOUT_MS, Math.max(0, remainingMs() - 2600)));
+    const technologyNews = isTechnologyNewsIntent(text);
+    const newsSearch = isNewsIntent(text);
+
+    if (isSearchIntent(text) && (newsSearch || process.env.SERPER_API_KEY)) {
+      // Google News RSS does not require a Serper API key.
+      const searchQuery = technologyNews
+        ? "технологии OR искусственный интеллект OR IT OR гаджеты"
+        : newsSearch
+          ? `новости за последние 24 часа ${text}`
+          : text;
+      searchContext = await searchWeb(
+        searchQuery,
+        Math.min(SERPER_TIMEOUT_MS, Math.max(0, remainingMs() - 2600)),
+        { news: newsSearch }
+      );
     }
 
-    const answer = await askGemini(
-      text,
-      oldHistory,
-      searchContext,
-      Math.max(0, Math.min(GEMINI_TIMEOUT_MS, remainingMs() - 600))
-    );
+    if (newsSearch && !searchContext) {
+      const history = [
+        ...oldHistory,
+        { role: "user", text: text.slice(0, MAX_HISTORY_MESSAGE_CHARS) },
+        { role: "model", text: "Не удалось получить свежие новости из поискового источника. Попробуй немного позже." }
+      ].slice(-MAX_HISTORY_MESSAGES);
+      return res.status(200).json(aliceResponse(
+        "Сейчас не получилось загрузить новости из поискового источника. Не буду придумывать заголовки и даты — попробуем позже.",
+        false,
+        history
+      ));
+    }
+
+    // News answers are formatted directly from verified search fields so dates and links are preserved.
+    const answer = newsSearch
+      ? formatNewsAnswer(searchContext)
+      : await askGemini(
+          text,
+          oldHistory,
+          searchContext,
+          Math.max(0, Math.min(GEMINI_TIMEOUT_MS, remainingMs() - 600)),
+          memoryContext(userStateUpdate)
+        );
 
     const history = [
       ...oldHistory,
@@ -238,12 +637,12 @@ export default async function handler(req, res) {
       { role: "model", text: answer.slice(0, MAX_HISTORY_MESSAGE_CHARS) }
     ].slice(-MAX_HISTORY_MESSAGES);
 
-    return res.status(200).json(aliceResponse(answer, false, history));
+    return res.status(200).json(aliceResponse(answer, false, history, userStateUpdate));
   } catch (error) {
     const safeError = error?.message === "AbortError" ? "TIME_BUDGET_EXHAUSTED" : error;
     console.warn("Alice webhook returned a fallback response:", safeError?.message || "unknown error");
-    return res.status(200).json(aliceResponse(errorForUser(safeError), false, oldHistory));
+    return res.status(200).json(aliceResponse(errorForUser(safeError), false, oldHistory, userStateUpdate));
   }
 }
 
-export { aliceResponse, fitAliceText, isSearchIntent, safeHistory };
+export { aliceResponse, fitAliceText, isSearchIntent, safeHistory, safeUserState, updateUserMemory, memoryCommandAnswer };
