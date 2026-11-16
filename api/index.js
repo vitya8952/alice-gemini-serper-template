@@ -231,9 +231,9 @@ async function searchWeb(query, timeoutMs, options = {}) {
   }
 }
 function formatNewsAnswer(searchContext) {
-  const lines = String(searchContext || "").split(/\\r?\\n/).filter(Boolean).slice(0, 3);
+  const lines = String(searchContext || "").split(/\r?\n/).filter(Boolean).slice(0, 3);
   const stories = lines.map((line, index) => {
-    const prefix = line.match(/^\\d+\\.\\s*/)?.[0] || "";
+    const prefix = line.match(/^\d+\.\s*/)?.[0] || "";
     const sourceMarker = ". Источник:";
     const dateMarker = ". Дата:";
     const linkMarker = " Ссылка:";
@@ -243,10 +243,11 @@ function formatNewsAnswer(searchContext) {
     if (!prefix || sourceAt < 0 || dateAt < 0 || linkAt < 0 || linkAt <= dateAt) return "";
     const title = line.slice(prefix.length, sourceAt).trim().slice(0, 110);
     const source = line.slice(sourceAt + sourceMarker.length, dateAt).trim().slice(0, 45);
-    const date = line.slice(dateAt + dateMarker.length, line.indexOf(".", dateAt + dateMarker.length)).trim().slice(0, 40);
+    const dateEnd = line.indexOf(".", dateAt + dateMarker.length);
+    const date = line.slice(dateAt + dateMarker.length, dateEnd < 0 ? linkAt : dateEnd).trim().slice(0, 40);
     const url = line.slice(linkAt + linkMarker.length).trim();
     if (!title || !url) return "";
-    return `${index + 1}. ${title} — ${date || "дата не указана"}; ${source || "источник не указан"}. Ссылка: ${url}`;
+    return (index + 1) + ". " + title + " — " + (date || "дата не указана") + "; " + (source || "источник не указан") + ". Ссылка: " + url;
   }).filter(Boolean);
   return stories.length
     ? "Три новости за сегодня: " + stories.join(" ")
