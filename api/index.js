@@ -86,69 +86,90 @@ async function searchWeb(query, timeoutMs, options = {}) {
   const key = process.env.SERPER_API_KEY;
   if (!key || timeoutMs < 150) return "";
 
+  const attempts = options.news
+    ? [
+        { query, gl: "ru", hl: "ru", dateFilter: true },
+        { query, gl: "ru", hl: "ru", dateFilter: false },
+        { query: "technology artificial intelligence gadgets cybersecurity", gl: "us", hl: "en", dateFilter: false }
+      ]
+    : [{ query, gl: "ru", hl: "ru", dateFilter: false }];
+
   try {
-    const { response, data } = await fetchJson(
-      options.news ? "https://google.serper.dev/news" : "https://google.serper.dev/search",
-      {
-        method: "POST",
-        headers: {
-          "X-API-KEY": key,
-          "Content-Type": "application/json"
+    for (let attempt = 0; attempt < attempts.length; attempt++) {
+      const remaining = timeoutMs - (Date.now() - searchStartedAt);
+      if (remaining < 180) break;
+      const config = attempts[attempt];
+      const { response, data } = await fetchJson(
+        options.news ? "https://google.serper.dev/news" : "https://google.serper.dev/search",
+        {
+          method: "POST",
+          headers: {
+            "X-API-KEY": key,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            q: config.query,
+            gl: config.gl,
+            hl: config.hl,
+            num: 5,
+            ...(options.news && config.dateFilter ? { tbs: "qdr:d" } : {})
+          })
         },
-        body: JSON.stringify({
-          q: query,
-          gl: "ru",
-          hl: "ru",
-          num: 5,
-          ...(options.news ? { tbs: "qdr:d" } : {})
-        })
-      },
-      Math.min(SERPER_TIMEOUT_MS, timeoutMs)
-    );
+        Math.min(SERPER_TIMEOUT_MS, remaining)
+      );
 
-    if (!response.ok) {
-      // Log only the provider's short error details; never log request headers or API keys.
-      const providerMessage = String(
-        data?.message ||
-        data?.error?.message ||
-        (typeof data?.error === "string" ? data.error : "") ||
-        data?.errorCode ||
-        data?.code ||
-        "no provider message"
-      ).replace(/[\\r\\n\\t]+/g, " ").slice(0, 240);
-      console.warn("Serper request failed:", {
+      if (!response.ok) {
+        const providerMessage = String(
+          data?.message ||
+          data?.error?.message ||
+          (typeof data?.error === "string" ? data.error : "") ||
+          data?.errorCode ||
+          data?.code ||
+          "no provider message"
+        ).replace(/[\\r\\n\\t]+/g, " ").slice(0, 240);
+        console.warn("Serper request failed:", {
+          status: Number(response.status),
+          providerMessage,
+          attempt: attempt + 1
+        });
+        if (!options.news) return "";
+        continue;
+      }
+
+      const sourceItems = options.news
+        ? (Array.isArray(data.news) ? data.news : [])
+        : (Array.isArray(data.organic) ? data.organic : []);
+      console.info("Serper search attempt:", {
         status: Number(response.status),
-        providerMessage
+        rawResultCount: sourceItems.length,
+        news: Boolean(options.news),
+        attempt: attempt + 1,
+        dateFilter: Boolean(config.dateFilter),
+        elapsedMs: Date.now() - searchStartedAt
       });
-      return "";
+      if (!sourceItems.length && options.news) continue;
+
+      const items = sourceItems
+        .slice(0, options.news ? 5 : 3)
+        .map((item, i) => {
+          const title = String(item.title || "").slice(0, 180);
+          const snippet = String(item.snippet || "").slice(0, 350);
+          const link = String(item.link || "").slice(0, 240);
+          const source = String(item.source || "").slice(0, 100);
+          const date = String(item.date || "").slice(0, 80);
+          return options.news
+            ? `${i + 1}. ${title}. Источник: ${source || "не указан"}. Дата: ${date || "не указана"}. ${snippet} Ссылка: ${link}`.trim()
+            : `${i + 1}. ${title}: ${snippet} ${link}`.trim();
+        });
+
+      const answerBox = data.answerBox?.answer || data.answerBox?.snippet;
+      if (answerBox) items.unshift(`Краткий ответ поисковика: ${String(answerBox).slice(0, 350)}`);
+      return items.length ? items.join("\\n") : "";
     }
-
-    const sourceItems = options.news
-      ? (Array.isArray(data.news) ? data.news : [])
-      : (Array.isArray(data.organic) ? data.organic : []);
-    const items = sourceItems
-      .slice(0, options.news ? 5 : 3)
-      .map((item, i) => {
-        const title = String(item.title || "").slice(0, 180);
-        const snippet = String(item.snippet || "").slice(0, 350);
-        const link = String(item.link || "").slice(0, 240);
-        const source = String(item.source || "").slice(0, 100);
-        const date = String(item.date || "").slice(0, 80);
-        return options.news
-          ? `${i + 1}. ${title}. Источник: ${source || "не указан"}. Дата: ${date || "не указана"}. ${snippet} Ссылка: ${link}`.trim()
-          : `${i + 1}. ${title}: ${snippet} ${link}`.trim();
-      });
-
-    console.info("Serper search completed:", {
-      status: Number(response.status),
-      resultCount: items.length,
-      news: Boolean(options.news),
+    console.warn("Serper returned no news after fallback attempts:", {
       elapsedMs: Date.now() - searchStartedAt
     });
-
-    const answerBox = data.answerBox?.answer || data.answerBox?.snippet;
-    if (answerBox) items.unshift(`Краткий ответ поисковика: ${String(answerBox).slice(0, 350)}`);
-    return items.length ? items.join("\n") : "";
+    return "";
   } catch (error) {
     console.warn("Serper search failed:", {
       error: String(error?.name || error?.message || "unknown").slice(0, 120),
@@ -157,7 +178,6 @@ async function searchWeb(query, timeoutMs, options = {}) {
     return "";
   }
 }
-
 async function askGemini(text, history, searchContext, timeoutMs) {
   const key = process.env.GEMINI_API_KEY;
   if (!key) throw new Error("MISSING_GEMINI_KEY");
