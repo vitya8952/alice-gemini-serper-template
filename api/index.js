@@ -116,7 +116,7 @@ async function searchGoogleNewsRss(query, timeoutMs) {
       const pubDate = field("pubDate");
       const date = pubDate ? new Date(pubDate).toLocaleString("ru-RU", { timeZone: "Europe/Warsaw" }) : "не указана";
       const description = field("description").replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").slice(0, 240);
-      return title ? \`\${index + 1}. \${title}. Источник: \${source || "Google Новости"}. Дата: \${date}. \${description} Ссылка: \${link}\` : "";
+      return title ? `${index + 1}. ${title}. Источник: ${source || "Google Новости"}. Дата: ${date}. ${description} Ссылка: ${link}` : "";
     }).filter(Boolean);
     console.info("Google News RSS completed:", { resultCount: items.length, elapsedMs: Date.now() - startedAt });
     return items.join("\n");
