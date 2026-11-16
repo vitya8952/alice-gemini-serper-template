@@ -119,31 +119,77 @@ async function searchGoogleNewsRss(query, timeoutMs) {
       return title && link ? { index, title, link, date } : null;
     }).filter(Boolean).slice(0, 3);
 
-    // Resolve Google News redirects to publisher URLs when possible.
+    // Resolve modern Google News article IDs through Google's batchexecute RPC.
+    const resolveGoogleNewsUrl = async (googleUrl) => {
+      const id = googleUrl.match(/\/(?:rss\/)?articles\/([^/?]+)/i)?.[1];
+      if (!id) return googleUrl;
+      const headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/128.0.0.0 Safari/537.36",
+        "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8",
+        "Cookie": "CONSENT=PENDING+987"
+      };
+      const pageController = new AbortController();
+      const pageTimer = setTimeout(() => pageController.abort(), 1050);
+      let html = "";
+      try {
+        const page = await fetch("https://news.google.com/rss/articles/" + id, {
+          redirect: "follow", signal: pageController.signal, headers
+        });
+        if (!page.ok) return googleUrl;
+        html = await page.text();
+      } finally {
+        clearTimeout(pageTimer);
+      }
+      const signature = html.match(/data-n-a-sg="([^"]+)"/)?.[1];
+      const timestamp = Number(html.match(/data-n-a-ts="(\d+)"/)?.[1]);
+      if (!signature || !Number.isFinite(timestamp) || !timestamp) return googleUrl;
+      const inner = JSON.stringify([
+        "garturlreq",
+        [["X", "X", ["X", "X"], null, null, 1, 1, "US:en", null, 1, null, null, null, null, null, 0, 1],
+          "X", "X", 1, [1, 1, 1], 1, 1, null, 0, 0, null, 0],
+        id, timestamp, signature
+      ]);
+      const body = "f.req=" + encodeURIComponent(JSON.stringify([[["Fbv4je", inner]]]));
+      const rpcController = new AbortController();
+      const rpcTimer = setTimeout(() => rpcController.abort(), 1050);
+      try {
+        const rpc = await fetch("https://news.google.com/_/DotsSplashUi/data/batchexecute", {
+          method: "POST", signal: rpcController.signal,
+          headers: {
+            ...headers,
+            "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+            "Origin": "https://news.google.com",
+            "Referer": "https://news.google.com/",
+            "X-Same-Domain": "1"
+          },
+          body
+        });
+        if (!rpc.ok) return googleUrl;
+        const raw = await rpc.text();
+        const splitAt = raw.indexOf("\n\n");
+        if (splitAt < 0) return googleUrl;
+        const frames = JSON.parse(raw.slice(splitAt + 2));
+        const frame = frames.find(entry => entry?.[0] === "wrb.fr" && entry?.[1] === "Fbv4je");
+        if (!frame?.[2]) return googleUrl;
+        const decoded = JSON.parse(frame[2]);
+        const target = decoded?.[1];
+        if (typeof target !== "string" || !/^https?:\/\//i.test(target)) return googleUrl;
+        const host = new URL(target).hostname;
+        return host === "news.google.com" ? googleUrl : target;
+      } finally {
+        clearTimeout(rpcTimer);
+      }
+    };
+
     const items = await Promise.all(parsedItems.map(async item => {
       let link = item.link;
       try {
-        const redirectController = new AbortController();
-        const redirectTimer = setTimeout(() => redirectController.abort(), 850);
-        try {
-          // Google News may not redirect HEAD requests; use a tiny ranged GET instead.
-          const resolved = await fetch(link, {
-            method: "GET",
-            redirect: "follow",
-            signal: redirectController.signal,
-            headers: {
-              "User-Agent": "Mozilla/5.0 (compatible; AliceNewsBot/1.0)",
-              "Range": "bytes=0-0"
-            }
-          });
-          if (resolved.url && !resolved.url.includes("news.google.com")) link = resolved.url;
-          await resolved.body?.cancel().catch(() => {});
-        } finally {
-          clearTimeout(redirectTimer);
-        }
-      } catch {}
-      const title = item.title.replace(/\s+/g, " ").trim().slice(0, 82);
-      return `${item.index + 1}. ${title} — ${item.date.split(",")[0]}. Ссылка: ${link}`;
+        link = await resolveGoogleNewsUrl(item.link);
+      } catch (error) {
+        console.info("Google News URL decode skipped:", { index: item.index + 1, reason: String(error?.name || "error") });
+      }
+      const title = item.title.replace(/\s+/g, " ").trim().slice(0, 58);
+      return `${item.index + 1}. ${title} — ${item.date.split(",")[0]}. ${link}`;
     }));
     console.info("Google News RSS completed:", { resultCount: items.length, elapsedMs: Date.now() - startedAt });
     return items.join("\n");
