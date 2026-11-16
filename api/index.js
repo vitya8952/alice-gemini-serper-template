@@ -31,10 +31,22 @@ function aliceResponse(text, endSession = false, history = [], userStateUpdate =
 }
 
 function safeUserState(value) {
-  const memory = Array.isArray(value?.memory)
-    ? value.memory.filter(item => typeof item === "string").map(item => item.trim()).filter(Boolean).slice(-12)
+  const incoming = Array.isArray(value?.memory)
+    ? value.memory.filter(item => typeof item === "string").map(item => item.trim()).filter(Boolean)
     : [];
-  const state = { memory };
+  const memory = [];
+  for (const item of incoming) {
+    const key = memoryFactKey(item);
+    if (key) {
+      for (let i = memory.length - 1; i >= 0; i--) {
+        if (memoryFactKey(memory[i]) === key) memory.splice(i, 1);
+      }
+    }
+    const duplicateIndex = memory.findIndex(existing => existing.toLowerCase() === item.toLowerCase());
+    if (duplicateIndex >= 0) memory.splice(duplicateIndex, 1);
+    memory.push(item);
+  }
+  const state = { memory: memory.slice(-12) };
   while (Buffer.byteLength(JSON.stringify(state), "utf8") > MAX_USER_MEMORY_BYTES && state.memory.length) {
     state.memory.shift();
   }
