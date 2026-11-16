@@ -142,7 +142,7 @@ async function searchGoogleNewsRss(query, timeoutMs) {
           clearTimeout(redirectTimer);
         }
       } catch {}
-      const title = item.title.replace(/\s+/g, " ").trim().slice(0, 64);
+      const title = item.title.replace(/\s+/g, " ").trim().slice(0, 82);
       return `${item.index + 1}. ${title} — ${item.date.split(",")[0]}. Ссылка: ${link}`;
     }));
     console.info("Google News RSS completed:", { resultCount: items.length, elapsedMs: Date.now() - startedAt });
