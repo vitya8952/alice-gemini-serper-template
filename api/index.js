@@ -343,7 +343,7 @@ export default async function handler(req, res) {
       const technologyNews = isTechnologyNewsIntent(text);
       const newsSearch = isNewsIntent(text);
       const searchQuery = technologyNews
-        ? "новости технологий IT искусственный интеллект гаджеты кибербезопасность за последние 24 часа"
+        ? "технологии OR искусственный интеллект OR IT OR гаджеты"
         : newsSearch
           ? `новости за последние 24 часа ${text}`
           : text;
