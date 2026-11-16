@@ -338,6 +338,7 @@ export default async function handler(req, res) {
     ));
   }
 
+  try {
     let searchContext = "";
     const technologyNews = isTechnologyNewsIntent(text);
     const newsSearch = isNewsIntent(text);
