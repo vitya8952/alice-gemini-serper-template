@@ -59,6 +59,17 @@ function memoryFactKey(fact) {
   return "";
 }
 
+function isForgetMemoryCommand(text) {
+  const normalized = String(text || "")
+    .toLowerCase()
+    .replace(/ё/g, "е")
+    .replace(/[.,!?]/g, " ")
+    .replace(/\\s+/g, " ")
+    .trim()
+    .replace(/^(?:алиса[, ]*)/, "");
+  return /^(?:забудь все(?: что ты (?:знаешь|помнишь) обо мне)?|забудь все что ты обо мне (?:знаешь|помнишь)|удали всю память|очисти память)$/.test(normalized);
+}
+
 function updateUserMemory(previousState, userText) {
   const state = safeUserState(previousState);
   const text = String(userText || "").trim();
@@ -98,7 +109,7 @@ function memoryCommandAnswer(text, state) {
       ? "Вот что я помню: " + state.memory.join("; ")
       : "Пока у меня нет сохранённых фактов. Можешь сказать: «Запомни, что…»";
   }
-  if (/^(?:алиса[, ]*)?(?:забудь всё|удали всю память|очисти память|забудь всё, что ты обо мне знаешь)$/i.test(String(text || "").trim())) {
+  if (isForgetMemoryCommand(text)) {
     return "Хорошо, личная память очищена.";
   }
   if (/^(?:алиса[, ]*)?(?:запомни|сохрани в памяти)/i.test(String(text || "").trim())) {
