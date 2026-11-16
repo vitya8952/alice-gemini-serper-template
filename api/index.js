@@ -141,7 +141,7 @@ async function searchGoogleNewsRss(query, timeoutMs) {
       return `${item.index + 1}. ${title} — ${item.date.split(",")[0]}. Ссылка: ${link}`;
     }));
     console.info("Google News RSS completed:", { resultCount: items.length, elapsedMs: Date.now() - startedAt });
-    return items.join("\\n");
+    return items.join("\n");
   } catch (error) {
     console.warn("Google News RSS failed:", { error: String(error?.name || error?.message || "unknown").slice(0, 100), elapsedMs: Date.now() - startedAt });
     return "";
