@@ -43,7 +43,7 @@ function safeUserState(value) {
 
 function memoryFactKey(fact) {
   const value = String(fact || "").trim().toLowerCase();
-  if (/^(?:мой\\s+)?любимый\\s+цвет\\b/i.test(value)) return "favorite-color";
+  if (/^(?:мой\s+)?любимый\s+цвет\b/i.test(value)) return "favorite-color";
   return "";
 }
 
