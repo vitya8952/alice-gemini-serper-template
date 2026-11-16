@@ -103,11 +103,13 @@ async function searchGoogleNewsRss(query, timeoutMs) {
       .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1")
       .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
       .replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'");
-    const entries = [...xml.matchAll(/<item>([\s\S]*?)<\/item>/gi)].slice(0, 5);
+    const allEntries = [...xml.matchAll(/<item>([\s\S]*?)<\/item>/gi)];
+    const entries = allEntries.slice(0, 5);
+    console.info("Google News RSS parsed:", { status: Number(response.status), responseBytes: Buffer.byteLength(xml, "utf8"), entryCount: allEntries.length });
     const items = entries.map((match, index) => {
       const block = match[1];
       const field = name => {
-        const found = block.match(new RegExp("<" + name + ">([\\\\s\\\\S]*?)<\\\\/" + name + ">", "i"));
+        const found = block.match(new RegExp("<" + name + ">([\\s\\S]*?)</" + name + ">", "i"));
         return found ? decode(found[1]).trim() : "";
       };
       const title = field("title").slice(0, 180);
@@ -336,12 +338,13 @@ export default async function handler(req, res) {
     ));
   }
 
-  try {
+    if (isSearchIntent(text)) {
     let searchContext = "";
     if (isSearchIntent(text) && process.env.SERPER_API_KEY) {
       // Search has a very short budget because Alice expects a response within 4.5 seconds.
       const technologyNews = isTechnologyNewsIntent(text);
       const newsSearch = isNewsIntent(text);
+      if (newsSearch || process.env.SERPER_API_KEY) {
       const searchQuery = technologyNews
         ? "технологии OR искусственный интеллект OR IT OR гаджеты"
         : newsSearch
@@ -352,6 +355,18 @@ export default async function handler(req, res) {
         Math.min(SERPER_TIMEOUT_MS, Math.max(0, remainingMs() - 2600)),
         { news: newsSearch }
       );
+      }
+      if (newsSearch && !searchContext) {
+        const history = [...oldHistory,
+          { role: "user", text: text.slice(0, MAX_HISTORY_MESSAGE_CHARS) },
+          { role: "model", text: "Не удалось получить свежие новости из поискового источника. Попробуй немного позже." }
+        ].slice(-MAX_HISTORY_MESSAGES);
+        return res.status(200).json(aliceResponse(
+          "Сейчас не получилось загрузить новости из поискового источника. Не буду придумывать заголовки и даты — попробуем позже.",
+          false,
+          history
+        ));
+      }
     }
 
     const answer = await askGemini(
