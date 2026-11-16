@@ -124,15 +124,20 @@ async function searchGoogleNewsRss(query, timeoutMs) {
       let link = item.link;
       try {
         const redirectController = new AbortController();
-        const redirectTimer = setTimeout(() => redirectController.abort(), 650);
+        const redirectTimer = setTimeout(() => redirectController.abort(), 850);
         try {
+          // Google News may not redirect HEAD requests; use a tiny ranged GET instead.
           const resolved = await fetch(link, {
-            method: "HEAD",
+            method: "GET",
             redirect: "follow",
             signal: redirectController.signal,
-            headers: { "User-Agent": "Mozilla/5.0 (compatible; AliceNewsBot/1.0)" }
+            headers: {
+              "User-Agent": "Mozilla/5.0 (compatible; AliceNewsBot/1.0)",
+              "Range": "bytes=0-0"
+            }
           });
           if (resolved.url && !resolved.url.includes("news.google.com")) link = resolved.url;
+          await resolved.body?.cancel().catch(() => {});
         } finally {
           clearTimeout(redirectTimer);
         }
@@ -255,7 +260,7 @@ function formatNewsAnswer(searchContext) {
   const stories = lines.map((line, index) => {
     const match = line.match(/^\d+\.\s*(.*?)\s+—\s+(\d{1,2}\.\d{1,2}\.\d{4})\.\s+Ссылка:\s+(https?:\/\/\S+)/);
     if (!match) return "";
-    return (index + 1) + ". " + match[1].slice(0, 64) + " — " + match[2] + ". " + match[3];
+    return (index + 1) + ". " + match[1].slice(0, 105) + " — " + match[2] + ". " + match[3];
   }).filter(Boolean);
   return stories.length === 3
     ? "Три новости за сегодня: " + stories.join(" ")
