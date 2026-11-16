@@ -1,5 +1,5 @@
 const DEFAULT_MODEL = "gemini-3.5-flash-lite";
-const MAX_HISTORY_MESSAGES = 8;
+const MAX_HISTORY_MESSAGES = 10;
 const MAX_HISTORY_MESSAGE_CHARS = 1200;
 const MAX_USER_MEMORY_BYTES = 900;
 const MAX_ALICE_TEXT = 1024;
@@ -11,6 +11,8 @@ const SYSTEM_PROMPT = [
   "Ты — Алиса, личная голосовая собеседница пользователя. Общайся на русском языке, естественно, тепло и непринуждённо.",
   "Общайся спокойно, доброжелательно и естественно. Не используй сарказм, подколы или язвительные шутки.",
   "Не будь бездушным справочником: поддерживай живой диалог, замечай контекст и можешь выражать собственное аргументированное мнение. Не соглашайся автоматически со всем, если пользователь ошибается.",
+  "Учитывай последние сообщения диалога: понимай короткие ответы, уточнения и ссылки вроде «это», «там», «он» по предыдущему контексту. Не проси повторить уже сообщённое. Если контекста действительно недостаточно, задай один короткий уточняющий вопрос.",
+  "Сохранённые сведения о пользователе используй естественно и только когда они помогают ответить. Не перечисляй их без просьбы, не делай из них лишних выводов и не выдавай предположения за факты.",
   "Отвечай кратко и так, чтобы ответ было удобно слушать голосом: обычно 1–3 коротких предложения. Не используй Markdown, таблицы, списки с символами или длинные вступления.",
   "Если вопрос требует актуальных данных и переданы результаты интернет-поиска, опирайся на них; не выдумывай отсутствующие факты. Если поиск не дал надёжного ответа, честно скажи об этом.",
   "Не утверждай, что помнишь прошлые разговоры или личные факты, если они действительно не переданы тебе в контексте или памяти.",
@@ -461,7 +463,7 @@ function formatNewsAnswer(searchContext) {
     : "Нашла новости, но не смогла надёжно извлечь все три ссылки и даты. Не буду их выдумывать.";
 }
 
-async function askGemini(text, history, searchContext, timeoutMs) {
+async function askGemini(text, history, searchContext, timeoutMs, savedMemoryContext = "") {
   const key = process.env.GEMINI_API_KEY;
   if (!key) throw new Error("MISSING_GEMINI_KEY");
   if (timeoutMs < 250) throw new Error("TIME_BUDGET_EXHAUSTED");
@@ -474,9 +476,14 @@ async function askGemini(text, history, searchContext, timeoutMs) {
     parts: [{ text: item.text }]
   }));
 
-  const prompt = searchContext
-    ? `${text}\n\nРезультаты поиска в интернете:\n${searchContext}\nИспользуй их только там, где они относятся к вопросу.`
-    : text;
+  const contextParts = [];
+  if (savedMemoryContext) {
+    contextParts.push(`Сохранённые сведения о пользователе:\n${savedMemoryContext}\nИспользуй их только если они уместны для текущего вопроса.`);
+  }
+  if (searchContext) {
+    contextParts.push(`Результаты поиска в интернете:\n${searchContext}\nОпирайся на них только там, где они относятся к вопросу.`);
+  }
+  const prompt = [text, ...contextParts].join("\n\n");
   contents.push({ role: "user", parts: [{ text: prompt }] });
 
   const { response, data } = await fetchJson(
@@ -616,8 +623,9 @@ export default async function handler(req, res) {
       : await askGemini(
           text,
           oldHistory,
-          [memoryContext(userStateUpdate), searchContext].filter(Boolean).join("\\n\\n"),
-          Math.max(0, Math.min(GEMINI_TIMEOUT_MS, remainingMs() - 600))
+          searchContext,
+          Math.max(0, Math.min(GEMINI_TIMEOUT_MS, remainingMs() - 600)),
+          memoryContext(userStateUpdate)
         );
 
     const history = [
