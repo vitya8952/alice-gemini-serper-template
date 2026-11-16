@@ -102,16 +102,20 @@ function updateUserMemory(previousState, userText) {
   }
 
   // Replace a fact only when the user explicitly asks to replace it.
-  const replaceMatch = normalized.match(/^(?:алиса )?замени (.{2,100}?) на (.{2,100})$/);
+  // Allow a short conversational prefix before "замени".
+  const replaceMatch = normalized.match(/(?:^|\s)замени\s+(.{2,100}?)\s+на\s+(.{2,100})$/);
   if (replaceMatch) {
-    const oldFact = replaceMatch[1];
-    const newFact = replaceMatch[2];
-    if (/любим(?:ый|ая) цвет/.test(oldFact)) {
-      state.memory = state.memory.filter(item => memoryFactKey(item) !== "favorite-color");
-      state.memory.push("мой любимый цвет " + newFact.replace(/^(?:мой )?любим(?:ый|ая) цвет /, ""));
+    const oldFact = replaceMatch[1].trim();
+    const newFact = replaceMatch[2].trim();
+    if (/любим(?:ый|ая)\s+цвет/.test(oldFact)) {
+      const color = newFact.replace(/^(?:мой\s+)?любим(?:ый|ая)\s+цвет\s+/, "").trim();
+      if (color) {
+        state.memory = state.memory.filter(item => memoryFactKey(item) !== "favorite-color");
+        state.memory.push("мой любимый цвет " + color);
+      }
     } else {
       state.memory = state.memory.map(item => {
-        const position = item.toLowerCase().indexOf(oldFact);
+        const position = normalizeMemoryText(item).indexOf(oldFact);
         return position < 0
           ? item
           : item.slice(0, position) + newFact + item.slice(position + oldFact.length);
@@ -155,7 +159,8 @@ function memoryCommandAnswer(text, state) {
   if (isForgetMemoryCommand(text)) {
     return "Хорошо, личная память очищена.";
   }
-  if (/^(?:алиса[, ]*)?(?:забудь|удали из памяти|замени)\b/i.test(String(text || "").trim())) {
+  const normalizedCommand = normalizeMemoryText(text).replace(/^алиса\s+/, "");
+  if (/^(?:забудь|удали из памяти|замени)\b/.test(normalizedCommand)) {
     return "Хорошо, обновила память.";
   }
   if (/^(?:алиса[, ]*)?(?:запомни|сохрани в памяти)/i.test(String(text || "").trim())) {
