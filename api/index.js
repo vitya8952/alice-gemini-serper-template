@@ -189,7 +189,7 @@ async function searchGoogleNewsRss(query, timeoutMs) {
         console.info("Google News URL decode skipped:", { index: item.index + 1, reason: String(error?.name || "error") });
       }
       const title = item.title.replace(/\s+/g, " ").trim().slice(0, 58);
-      return `${item.index + 1}. ${title} — ${item.date.split(",")[0]}. ${link}`;
+      return `${item.index + 1}. ${title} — ${item.date.split(",")[0]}. Ссылка: ${link}`;
     }));
     console.info("Google News RSS completed:", { resultCount: items.length, elapsedMs: Date.now() - startedAt });
     return items.join("\n");
