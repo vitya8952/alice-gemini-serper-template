@@ -138,7 +138,7 @@ async function searchGoogleNewsRss(query, timeoutMs) {
         }
       } catch {}
       const title = item.title.replace(/\s+/g, " ").trim().slice(0, 64);
-      return \`\${item.index + 1}. \${title} — \${item.date.split(",")[0]}. Ссылка: \${link}\`;
+      return `${item.index + 1}. ${title} — ${item.date.split(",")[0]}. Ссылка: ${link}`;
     }));
     console.info("Google News RSS completed:", { resultCount: items.length, elapsedMs: Date.now() - startedAt });
     return items.join("\\n");
