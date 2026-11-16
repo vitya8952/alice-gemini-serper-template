@@ -41,6 +41,12 @@ function safeUserState(value) {
   return state;
 }
 
+function memoryFactKey(fact) {
+  const value = String(fact || "").trim().toLowerCase();
+  if (/^(?:мой\\s+)?любимый\\s+цвет\\b/i.test(value)) return "favorite-color";
+  return "";
+}
+
 function updateUserMemory(previousState, userText) {
   const state = safeUserState(previousState);
   const text = String(userText || "").trim();
@@ -56,8 +62,14 @@ function updateUserMemory(previousState, userText) {
   const rememberMatch = text.match(/^(?:алиса[, ]*)?(?:запомни|сохрани в памяти)(?:,?\s+что)?\s+(.{3,180})$/i);
   if (rememberMatch && !/(парол|пин-код|номер карты|паспорт|диагноз|болезн|лекарств|религи|политическ|сексуальн)/i.test(rememberMatch[1])) {
     const fact = rememberMatch[1].replace(/[.!?]+$/, "").trim();
-    if (fact && !state.memory.some(item => item.toLowerCase() === fact.toLowerCase())) {
-      state.memory.push(fact);
+    if (fact) {
+      const newKey = memoryFactKey(fact);
+      if (newKey) {
+        state.memory = state.memory.filter(item => memoryFactKey(item) !== newKey);
+      }
+      if (!state.memory.some(item => item.toLowerCase() === fact.toLowerCase())) {
+        state.memory.push(fact);
+      }
     }
   }
 
