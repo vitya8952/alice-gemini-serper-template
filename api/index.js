@@ -75,7 +75,7 @@ function normalizeMemoryText(value) {
     .toLowerCase()
     .replace(/ё/g, "е")
     .replace(/[.,!?]/g, " ")
-    .replace(/\\s+/g, " ")
+    .replace(/\s+/g, " ")
     .trim();
 }
 
@@ -122,7 +122,7 @@ function updateUserMemory(previousState, userText) {
     state.memory.push("Предпочитает спокойное, доброжелательное общение без сарказма и подколов.");
   }
 
-  const rememberMatch = text.match(/^(?:алиса[, ]*)?(?:запомни|сохрани в памяти)(?:,?\\s+что)?\\s+(.{3,180})$/i);
+  const rememberMatch = text.match(/^(?:алиса[, ]*)?(?:запомни|сохрани в памяти)(?:,?\s+что)?\s+(.{3,180})$/i);
   if (rememberMatch && !/(парол|пин-код|номер карты|паспорт|диагноз|болезн|лекарств|религи|политическ|сексуальн)/i.test(rememberMatch[1])) {
     const fact = rememberMatch[1].replace(/[.!?]+$/, "").trim();
     if (fact) {
@@ -152,7 +152,7 @@ function memoryCommandAnswer(text, state) {
   if (isForgetMemoryCommand(text)) {
     return "Хорошо, личная память очищена.";
   }
-  if (/^(?:алиса[, ]*)?(?:забудь|удали из памяти|замени)\\b/i.test(String(text || "").trim())) {
+  if (/^(?:алиса[, ]*)?(?:забудь|удали из памяти|замени)\b/i.test(String(text || "").trim())) {
     return "Хорошо, обновила память.";
   }
   if (/^(?:алиса[, ]*)?(?:запомни|сохрани в памяти)/i.test(String(text || "").trim())) {
@@ -249,7 +249,7 @@ async function searchGoogleNewsRss(query, timeoutMs) {
     const parsedItems = entries.map((match, index) => {
       const block = match[1];
       const field = name => {
-        const found = block.match(new RegExp("<" + name + ">([\\s\\S]*?)</" + name + ">", "i"));
+        const found = block.match(new RegExp("<" + name + ">([\s\\S]*?)</" + name + ">", "i"));
         return found ? decode(found[1]).trim() : "";
       };
       const title = field("title").slice(0, 180);
