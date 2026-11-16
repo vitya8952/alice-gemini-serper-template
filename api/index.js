@@ -230,6 +230,29 @@ async function searchWeb(query, timeoutMs, options = {}) {
     return "";
   }
 }
+function formatNewsAnswer(searchContext) {
+  const lines = String(searchContext || "").split(/\\r?\\n/).filter(Boolean).slice(0, 3);
+  const stories = lines.map((line, index) => {
+    const prefix = line.match(/^\\d+\\.\\s*/)?.[0] || "";
+    const sourceMarker = ". Источник:";
+    const dateMarker = ". Дата:";
+    const linkMarker = " Ссылка:";
+    const sourceAt = line.indexOf(sourceMarker);
+    const dateAt = line.indexOf(dateMarker, sourceAt + sourceMarker.length);
+    const linkAt = line.lastIndexOf(linkMarker);
+    if (!prefix || sourceAt < 0 || dateAt < 0 || linkAt < 0 || linkAt <= dateAt) return "";
+    const title = line.slice(prefix.length, sourceAt).trim().slice(0, 110);
+    const source = line.slice(sourceAt + sourceMarker.length, dateAt).trim().slice(0, 45);
+    const date = line.slice(dateAt + dateMarker.length, line.indexOf(".", dateAt + dateMarker.length)).trim().slice(0, 40);
+    const url = line.slice(linkAt + linkMarker.length).trim();
+    if (!title || !url) return "";
+    return `${index + 1}. ${title} — ${date || "дата не указана"}; ${source || "источник не указан"}. Ссылка: ${url}`;
+  }).filter(Boolean);
+  return stories.length
+    ? "Три новости за сегодня: " + stories.join(" ")
+    : "Нашла новости, но не смогла надёжно извлечь их ссылки и даты. Не буду их выдумывать.";
+}
+
 async function askGemini(text, history, searchContext, timeoutMs) {
   const key = process.env.GEMINI_API_KEY;
   if (!key) throw new Error("MISSING_GEMINI_KEY");
@@ -370,12 +393,15 @@ export default async function handler(req, res) {
       ));
     }
 
-    const answer = await askGemini(
-      text,
-      oldHistory,
-      searchContext,
-      Math.max(0, Math.min(GEMINI_TIMEOUT_MS, remainingMs() - 600))
-    );
+    // News answers are formatted directly from verified search fields so dates and links are preserved.
+    const answer = newsSearch
+      ? formatNewsAnswer(searchContext)
+      : await askGemini(
+          text,
+          oldHistory,
+          searchContext,
+          Math.max(0, Math.min(GEMINI_TIMEOUT_MS, remainingMs() - 600))
+        );
 
     const history = [
       ...oldHistory,
