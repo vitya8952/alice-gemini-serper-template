@@ -44,7 +44,7 @@ function safeUserState(value) {
 function updateUserMemory(previousState, userText) {
   const state = safeUserState(previousState);
   const text = String(userText || "").trim();
-  if (/\\b(забудь всё|удали всю память|очисти память|забудь всё, что ты обо мне знаешь)\\b/i.test(text)) {
+  if (/\b(забудь всё|удали всю память|очисти память|забудь всё, что ты обо мне знаешь)\b/i.test(text)) {
     return { memory: [] };
   }
 
@@ -53,7 +53,7 @@ function updateUserMemory(previousState, userText) {
     state.memory.push("Предпочитает спокойное, доброжелательное общение без сарказма и подколов.");
   }
 
-  const rememberMatch = text.match(/^(?:алиса[, ]*)?(?:запомни|сохрани в памяти)(?:,?\\s+что)?\\s+(.{3,180})$/i);
+  const rememberMatch = text.match(/^(?:алиса[, ]*)?(?:запомни|сохрани в памяти)(?:,?\s+что)?\s+(.{3,180})$/i);
   if (rememberMatch && !/(парол|пин-код|номер карты|паспорт|диагноз|болезн|лекарств|религи|политическ|сексуальн)/i.test(rememberMatch[1])) {
     const fact = rememberMatch[1].replace(/[.!?]+$/, "").trim();
     if (fact && !state.memory.some(item => item.toLowerCase() === fact.toLowerCase())) {
